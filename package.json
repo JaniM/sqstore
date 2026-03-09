@@ -17,7 +17,8 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "check": "biome check .",
-    "check:fix": "biome check --fix ."
+    "check:fix": "biome check --fix .",
+    "release": "npm run build && npm test && npm run typecheck && npm publish --workspace=packages/core && npm publish --workspace=packages/vue && npm publish --workspace=packages/react"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.4",
