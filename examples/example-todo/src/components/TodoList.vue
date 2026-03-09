@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useOperation, useSlot } from "@next-gen-store/vue";
+import { useOperation, useSlot } from "@sqstore/vue";
 import { inject } from "vue";
 import type { TodoStore } from "../store";
 import TodoItem from "./TodoItem.vue";

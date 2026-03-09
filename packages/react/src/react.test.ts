@@ -1,6 +1,7 @@
+// @vitest-environment jsdom
 import { createStore } from "@sqstore/core";
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
-import { effectScope } from "vue";
 import { useOperation, useSlot } from "./index";
 
 // ============================================================================
@@ -119,89 +120,68 @@ describe("useSlot", () => {
     const store = createCounterStore();
     store.operations.setCounter(42);
 
-    const scope = effectScope();
-    scope.run(() => {
-      const ref = useSlot(store, "counter");
-      expect(ref.value).toBe(42);
-    });
+    const { result, unmount } = renderHook(() => useSlot(store, "counter"));
+    expect(result.current).toBe(42);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
-  test("ref updates on slot change", () => {
+  test("value updates on slot change", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    let ref!: ReturnType<typeof useSlot<any, any, "counter">>;
+    const { result, unmount } = renderHook(() => useSlot(store, "counter"));
+    expect(result.current).toBe(0);
 
-    scope.run(() => {
-      ref = useSlot(store, "counter");
+    act(() => {
+      store.operations.increment();
     });
+    expect(result.current).toBe(1);
 
-    expect(ref.value).toBe(0);
-
-    store.operations.increment();
-    expect(ref.value).toBe(1);
-
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("tracks multiple consecutive changes", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    let ref!: ReturnType<typeof useSlot<any, any, "counter">>;
+    const { result, unmount } = renderHook(() => useSlot(store, "counter"));
 
-    scope.run(() => {
-      ref = useSlot(store, "counter");
+    act(() => {
+      store.operations.setCounter(10);
     });
+    expect(result.current).toBe(10);
 
-    store.operations.setCounter(10);
-    expect(ref.value).toBe(10);
+    act(() => {
+      store.operations.setCounter(20);
+    });
+    expect(result.current).toBe(20);
 
-    store.operations.setCounter(20);
-    expect(ref.value).toBe(20);
+    act(() => {
+      store.operations.setCounter(30);
+    });
+    expect(result.current).toBe(30);
 
-    store.operations.setCounter(30);
-    expect(ref.value).toBe(30);
-
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
-  test("unsubscribes on scope.stop()", () => {
+  test("unsubscribes on unmount", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    let ref!: ReturnType<typeof useSlot<any, any, "counter">>;
+    const { result, unmount } = renderHook(() => useSlot(store, "counter"));
 
-    scope.run(() => {
-      ref = useSlot(store, "counter");
+    act(() => {
+      store.operations.setCounter(5);
     });
+    expect(result.current).toBe(5);
 
-    store.operations.setCounter(5);
-    expect(ref.value).toBe(5);
-
-    scope.stop();
+    unmount();
 
     store.operations.setCounter(99);
-    expect(ref.value).toBe(5);
+    // After unmount, the hook no longer tracks — result is stale
+    expect(result.current).toBe(5);
 
-    store.destroy();
-  });
-
-  test("returns a readonly ref", () => {
-    const store = createCounterStore();
-
-    const scope = effectScope();
-    scope.run(() => {
-      const ref = useSlot(store, "counter");
-      expect((ref as any).__v_isReadonly).toBe(true);
-    });
-
-    scope.stop();
     store.destroy();
   });
 });
@@ -228,61 +208,61 @@ describe("useSlot — selector", () => {
   test("derives value on initial read", () => {
     const store = createListStore();
 
-    const scope = effectScope();
-    scope.run(() => {
-      const ref = useSlot(store, "items", (items) => items[1]);
-      expect(ref.value).toBe("b");
-    });
+    const { result, unmount } = renderHook(() =>
+      useSlot(store, "items", (items) => items[1]),
+    );
+    expect(result.current).toBe("b");
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("updates when selected value changes", () => {
     const store = createListStore();
 
-    const scope = effectScope();
-    let ref!: ReturnType<typeof useSlot<any, any, "items", string>>;
+    const { result, unmount } = renderHook(() =>
+      useSlot(store, "items", (items) => items[1]),
+    );
 
-    scope.run(() => {
-      ref = useSlot(store, "items", (items) => items[1]);
+    expect(result.current).toBe("b");
+
+    act(() => {
+      store.operations.setItems(["a", "z", "c"]);
     });
+    expect(result.current).toBe("z");
 
-    expect(ref.value).toBe("b");
-
-    store.operations.setItems(["a", "z", "c"]);
-    expect(ref.value).toBe("z");
-
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
-  test("skips update when selected value unchanged", () => {
+  test("skips re-render when selected value unchanged", () => {
     const store = createListStore();
+    let renderCount = 0;
 
-    const scope = effectScope();
-    let ref!: ReturnType<typeof useSlot<any, any, "items", string>>;
-
-    scope.run(() => {
-      ref = useSlot(store, "items", (items) => items[1]);
+    const { result, unmount } = renderHook(() => {
+      renderCount++;
+      return useSlot(store, "items", (items) => items[1]);
     });
 
-    // Capture the ref's internal ShallowRef identity
-    const initialValue = ref.value;
-    expect(initialValue).toBe("b");
+    expect(result.current).toBe("b");
+    const rendersAfterMount = renderCount;
 
-    // Mutate items[0] but keep items[1] the same — "b" === "b" by Object.is
-    store.operations.setItems(["x", "b", "c"]);
+    // Mutate items[0] but keep items[1] the same
+    act(() => {
+      store.operations.setItems(["x", "b", "c"]);
+    });
 
-    // shallowRef should NOT have triggered because "b" === "b"
-    expect(ref.value).toBe("b");
-    // The primitive value is the same, so no reactivity trigger
+    // Should NOT have re-rendered because "b" === "b"
+    expect(renderCount).toBe(rendersAfterMount);
+    expect(result.current).toBe("b");
+
+    unmount();
+    store.destroy();
   });
 
   test("works with object selector returning same reference", () => {
-    const sharedObj = { id: 1 };
     const store = createStore(
-      { data: sharedObj },
+      { data: { id: 1 } },
       ({ set }) => ({
         setData: {
           type: "sync" as const,
@@ -293,24 +273,25 @@ describe("useSlot — selector", () => {
       }),
     );
 
-    const scope = effectScope();
-    let ref!: ReturnType<typeof useSlot<any, any, "data", number>>;
+    const { result, unmount } = renderHook(() =>
+      useSlot(store, "data", (data) => data.id),
+    );
 
-    scope.run(() => {
-      ref = useSlot(store, "data", (data) => data.id);
-    });
-
-    expect(ref.value).toBe(1);
+    expect(result.current).toBe(1);
 
     // Change the object but keep the selected field the same
-    store.operations.setData({ id: 1 });
-    expect(ref.value).toBe(1);
+    act(() => {
+      store.operations.setData({ id: 1 });
+    });
+    expect(result.current).toBe(1);
 
     // Now change the selected field
-    store.operations.setData({ id: 2 });
-    expect(ref.value).toBe(2);
+    act(() => {
+      store.operations.setData({ id: 2 });
+    });
+    expect(result.current).toBe(2);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 });
@@ -320,23 +301,20 @@ describe("useSlot — selector", () => {
 // ============================================================================
 
 describe("useOperation — sync operations", () => {
-  test("initial state: all refs inert", () => {
+  test("initial state: all fields inert", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    scope.run(() => {
-      const op = useOperation(store, "getCounter");
+    const { result, unmount } = renderHook(() => useOperation(store, "getCounter"));
 
-      expect(op.data.value).toBe(undefined);
-      expect(op.state.value).toBe(null);
-      expect(op.isLoading.value).toBe(false);
-      expect(op.isSuccess.value).toBe(false);
-      expect(op.isError.value).toBe(false);
-      expect(op.isCancelled.value).toBe(false);
-      expect(op.error.value).toBe(undefined);
-    });
+    expect(result.current.data).toBe(undefined);
+    expect(result.current.state).toBe(null);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isSuccess).toBe(false);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.isCancelled).toBe(false);
+    expect(result.current.error).toBe(undefined);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
@@ -344,67 +322,68 @@ describe("useOperation — sync operations", () => {
     const store = createCounterStore();
     store.operations.setCounter(42);
 
-    const scope = effectScope();
-    scope.run(() => {
-      const op = useOperation(store, "getCounter");
-      op.execute();
-      expect(op.data.value).toBe(42);
-    });
+    const { result, unmount } = renderHook(() => useOperation(store, "getCounter"));
 
-    scope.stop();
+    act(() => {
+      result.current.execute();
+    });
+    expect(result.current.data).toBe(42);
+
+    unmount();
     store.destroy();
   });
 
-  test("lifecycle refs stay inert after execute", () => {
+  test("lifecycle fields stay inert after execute", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    scope.run(() => {
-      const op = useOperation(store, "getCounter");
-      op.execute();
+    const { result, unmount } = renderHook(() => useOperation(store, "getCounter"));
 
-      expect(op.state.value).toBe(null);
-      expect(op.isLoading.value).toBe(false);
-      expect(op.isSuccess.value).toBe(false);
-      expect(op.isError.value).toBe(false);
-      expect(op.isCancelled.value).toBe(false);
+    act(() => {
+      result.current.execute();
     });
 
-    scope.stop();
+    expect(result.current.state).toBe(null);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isSuccess).toBe(false);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.isCancelled).toBe(false);
+
+    unmount();
     store.destroy();
   });
 
   test("multiple executes update data", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    scope.run(() => {
-      const op = useOperation(store, "getCounter");
+    const { result, unmount } = renderHook(() => useOperation(store, "getCounter"));
 
+    act(() => {
       store.operations.setCounter(10);
-      op.execute();
-      expect(op.data.value).toBe(10);
-
-      store.operations.setCounter(20);
-      op.execute();
-      expect(op.data.value).toBe(20);
+      result.current.execute();
     });
+    expect(result.current.data).toBe(10);
 
-    scope.stop();
+    act(() => {
+      store.operations.setCounter(20);
+      result.current.execute();
+    });
+    expect(result.current.data).toBe(20);
+
+    unmount();
     store.destroy();
   });
 
   test("parameterized sync ops", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    scope.run(() => {
-      const op = useOperation(store, "setCounter");
-      op.execute(77);
-      expect(store.get("counter")).toBe(77);
-    });
+    const { result, unmount } = renderHook(() => useOperation(store, "setCounter"));
 
-    scope.stop();
+    act(() => {
+      result.current.execute(77);
+    });
+    expect(store.get("counter")).toBe(77);
+
+    unmount();
     store.destroy();
   });
 });
@@ -417,84 +396,79 @@ describe("useOperation — async operations", () => {
   test("before execute: initial values", () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    scope.run(() => {
-      const op = useOperation(store, "fetchData");
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-      expect(op.data.value).toBe(undefined);
-      expect(op.state.value).toBe(null);
-      expect(op.isLoading.value).toBe(false);
-      expect(op.isSuccess.value).toBe(false);
-      expect(op.isError.value).toBe(false);
-      expect(op.isCancelled.value).toBe(false);
-      expect(op.error.value).toBe(undefined);
-    });
+    expect(result.current.data).toBe(undefined);
+    expect(result.current.state).toBe(null);
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isSuccess).toBe(false);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.isCancelled).toBe(false);
+    expect(result.current.error).toBe(undefined);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("loading state after execute", () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    scope.run(() => {
-      const op = useOperation(store, "fetchData");
-      op.execute("test");
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-      expect(op.isLoading.value).toBe(true);
-      expect(op.state.value?.status).toBe("loading");
+    act(() => {
+      result.current.execute("test");
     });
 
-    scope.stop();
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.state?.status).toBe("loading");
+
+    unmount();
     store.destroy();
   });
 
   test("success after resolution", async () => {
     const { store, resolve } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-    scope.run(() => {
-      op = useOperation(store, "fetchData");
-      op.execute("test");
+    act(() => {
+      result.current.execute("test");
     });
 
-    resolve("hello world");
-    await flush();
+    await act(async () => {
+      resolve("hello world");
+      await flush();
+    });
 
-    expect(op.isSuccess.value).toBe(true);
-    expect(op.data.value).toBe("hello world");
+    expect(result.current.isSuccess).toBe(true);
+    expect(result.current.data).toBe("hello world");
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("error after rejection", async () => {
     const { store, reject } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-    scope.run(() => {
-      op = useOperation(store, "fetchData");
-      op.execute("test");
+    act(() => {
+      result.current.execute("test");
     });
 
-    reject(new Error("network failure"));
-    await flush();
+    await act(async () => {
+      reject(new Error("network failure"));
+      await flush();
+    });
 
-    expect(op.isError.value).toBe(true);
-    expect(op.error.value?.message).toBe("network failure");
+    expect(result.current.isError).toBe(true);
+    expect(result.current.error?.message).toBe("network failure");
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("re-execute cancels previous, tracks new", async () => {
-    // We need separate resolve/reject per invocation, so create a fresh store
-    // that captures multiple promises.
     let resolve1!: (v: string) => void;
     let resolve2!: (v: string) => void;
     let callCount = 0;
@@ -519,28 +493,33 @@ describe("useOperation — async operations", () => {
       },
     }));
 
-    const scope2 = effectScope();
-    let op2!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() => useOperation(store2, "fetchData"));
 
-    scope2.run(() => {
-      op2 = useOperation(store2, "fetchData");
-      op2.execute("first");
+    act(() => {
+      result.current.execute("first");
     });
 
     // Second execute cancels first
-    op2.execute("second");
-    await flush();
+    act(() => {
+      result.current.execute("second");
+    });
 
-    // First is cancelled, second is loading
-    expect(op2.isLoading.value).toBe(true);
+    await act(async () => {
+      await flush();
+    });
 
-    resolve2("second result");
-    await flush();
+    // Second is loading
+    expect(result.current.isLoading).toBe(true);
 
-    expect(op2.data.value).toBe("second result");
-    expect(op2.isSuccess.value).toBe(true);
+    await act(async () => {
+      resolve2("second result");
+      await flush();
+    });
 
-    scope2.stop();
+    expect(result.current.data).toBe("second result");
+    expect(result.current.isSuccess).toBe(true);
+
+    unmount();
     store2.destroy();
   });
 
@@ -569,76 +548,78 @@ describe("useOperation — async operations", () => {
       },
     }));
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-    scope.run(() => {
-      op = useOperation(store, "fetchData");
-      op.execute("first");
+    act(() => {
+      result.current.execute("first");
     });
 
     // Resolve first invocation
-    resolve1("first result");
-    await flush();
+    await act(async () => {
+      resolve1("first result");
+      await flush();
+    });
 
-    expect(op.data.value).toBe("first result");
-    expect(op.isSuccess.value).toBe(true);
+    expect(result.current.data).toBe("first result");
+    expect(result.current.isSuccess).toBe(true);
 
     // Re-execute — data should retain previous result while loading
-    op.execute("second");
-    expect(op.isLoading.value).toBe(true);
-    expect(op.data.value).toBe("first result");
+    act(() => {
+      result.current.execute("second");
+    });
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.data).toBe("first result");
 
     // Resolve second invocation
-    resolve2("second result");
-    await flush();
+    await act(async () => {
+      resolve2("second result");
+      await flush();
+    });
 
-    expect(op.data.value).toBe("second result");
-    expect(op.isSuccess.value).toBe(true);
+    expect(result.current.data).toBe("second result");
+    expect(result.current.isSuccess).toBe(true);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
-  test("state.value.data contains the result on success", async () => {
+  test("state.data contains the result on success", async () => {
     const { store, resolve } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-    scope.run(() => {
-      op = useOperation(store, "fetchData");
-      op.execute("test");
+    act(() => {
+      result.current.execute("test");
     });
 
-    resolve("from-state");
-    await flush();
+    await act(async () => {
+      resolve("from-state");
+      await flush();
+    });
 
-    expect(op.state.value?.data).toBe("from-state");
-    expect(op.state.value?.isSuccess).toBe(true);
+    expect(result.current.state?.data).toBe("from-state");
+    expect(result.current.state?.isSuccess).toBe(true);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
-  test("scope disposal cancels invocation", async () => {
+  test("unmount cancels invocation", async () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-    scope.run(() => {
-      op = useOperation(store, "fetchData");
-      op.execute("test");
+    act(() => {
+      result.current.execute("test");
     });
 
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
-    // Dispose the scope — should cancel the async handle
-    scope.stop();
+    // Unmount — should cancel the async handle
+    unmount();
 
     // data should remain undefined since we never resolved
-    expect(op.data.value).toBe(undefined);
+    expect(result.current.data).toBe(undefined);
 
     store.destroy();
   });
@@ -652,35 +633,29 @@ describe("useOperation — immediate option", () => {
   test("immediate: true (void-param async)", () => {
     const { store } = createVoidAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetch", { immediate: true }),
+    );
 
-    scope.run(() => {
-      op = useOperation(store, "fetch", { immediate: true });
-    });
+    expect(result.current.isLoading).toBe(true);
 
-    expect(op.isLoading.value).toBe(true);
-
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("immediate: true with params (parameterized async)", () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
-
-    scope.run(() => {
-      op = useOperation(store, "fetchData", {
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchData", {
         params: "auto-param",
         immediate: true,
-      });
-    });
+      }),
+    );
 
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
@@ -688,33 +663,27 @@ describe("useOperation — immediate option", () => {
     const store = createCounterStore();
     store.operations.setCounter(99);
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "getCounter", { immediate: true }),
+    );
 
-    scope.run(() => {
-      op = useOperation(store, "getCounter", { immediate: true });
-    });
+    expect(result.current.data).toBe(99);
 
-    expect(op.data.value).toBe(99);
-
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("immediate: true without params auto-executes (non-void op)", () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
-
-    scope.run(() => {
-      op = useOperation(store, "fetchData", { immediate: true });
-    });
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchData", { immediate: true }),
+    );
 
     // Should have called execute with undefined params — still triggers loading
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 });
@@ -727,83 +696,80 @@ describe("useOperation — params option", () => {
   test("execute() uses default params", () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchData", { params: "default-param" }),
+    );
 
-    scope.run(() => {
-      op = useOperation(store, "fetchData", { params: "default-param" });
-      op.execute();
+    act(() => {
+      result.current.execute();
     });
 
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("immediate: true with params auto-executes", () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
-
-    scope.run(() => {
-      op = useOperation(store, "fetchData", {
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchData", {
         params: "auto-param",
         immediate: true,
-      });
-    });
+      }),
+    );
 
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("passive tracking: tracks matching lane key", async () => {
     const { store, resolve } = createKeyedAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
-
-    scope.run(() => {
-      op = useOperation(store, "fetchItem", { params: { id: 1 } });
-    });
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchItem", { params: { id: 1 } }),
+    );
 
     // Trigger operation directly on the store (not via execute)
-    store.operations.fetchItem({ id: 1 });
+    act(() => {
+      store.operations.fetchItem({ id: 1 });
+    });
 
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
-    resolve("item-1-data");
-    await flush();
+    await act(async () => {
+      resolve("item-1-data");
+      await flush();
+    });
 
-    expect(op.isSuccess.value).toBe(true);
-    expect(op.data.value).toBe("item-1-data");
+    expect(result.current.isSuccess).toBe(true);
+    expect(result.current.data).toBe("item-1-data");
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
   test("passive tracking: ignores non-matching lane key", () => {
     const { store } = createKeyedAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
-
-    scope.run(() => {
-      op = useOperation(store, "fetchItem", { params: { id: 1 } });
-    });
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchItem", { params: { id: 1 } }),
+    );
 
     // Trigger a different entity — suppress unhandled rejection from destroy()
-    const handle = store.operations.fetchItem({ id: 2 });
-    handle.promise.catch(() => {});
+    act(() => {
+      const handle = store.operations.fetchItem({ id: 2 });
+      handle.promise.catch(() => {});
+    });
 
-    // Composable should NOT track the other lane
-    expect(op.isLoading.value).toBe(false);
-    expect(op.data.value).toBe(undefined);
+    // Hook should NOT track the other lane
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBe(undefined);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 
@@ -834,46 +800,54 @@ describe("useOperation — params option", () => {
       },
     }));
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchItem", { params: { id: 1 } }),
+    );
 
-    scope.run(() => {
-      op = useOperation(store, "fetchItem", { params: { id: 1 } });
-      op.execute(); // first call
+    act(() => {
+      result.current.execute(); // first call
     });
 
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
     // Second call on same lane — cancelPrevious aborts the first
-    op.execute();
-    await flush();
+    act(() => {
+      result.current.execute();
+    });
 
-    expect(op.isLoading.value).toBe(true);
+    await act(async () => {
+      await flush();
+    });
 
-    resolve2("second-result");
-    await flush();
+    expect(result.current.isLoading).toBe(true);
 
-    expect(op.data.value).toBe("second-result");
-    expect(op.isSuccess.value).toBe(true);
+    await act(async () => {
+      resolve2("second-result");
+      await flush();
+    });
 
-    scope.stop();
+    expect(result.current.data).toBe("second-result");
+    expect(result.current.isSuccess).toBe(true);
+
+    unmount();
     store.destroy();
   });
 
-  test("scope disposal does NOT cancel tracked handle", async () => {
+  test("unmount does NOT cancel tracked handle (passive)", async () => {
     const { store, resolve } = createKeyedAsyncStore();
 
-    const scope = effectScope();
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchItem", { params: { id: 1 } }),
+    );
 
-    scope.run(() => {
-      const op = useOperation(store, "fetchItem", { params: { id: 1 } });
-      op.execute();
+    act(() => {
+      result.current.execute();
     });
 
-    // Dispose scope — passive observer should NOT cancel the handle
-    scope.stop();
+    // Unmount — passive observer should NOT cancel the handle
+    unmount();
 
-    // Resolve after disposal
+    // Resolve after unmount
     resolve("post-dispose-data");
     await flush();
 
@@ -883,23 +857,21 @@ describe("useOperation — params option", () => {
     store.destroy();
   });
 
-  test("scope disposal without params still cancels (regression)", async () => {
+  test("unmount without params still cancels (regression)", async () => {
     const { store } = createAsyncStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
 
-    scope.run(() => {
-      op = useOperation(store, "fetchData");
-      op.execute("test");
+    act(() => {
+      result.current.execute("test");
     });
 
-    expect(op.isLoading.value).toBe(true);
+    expect(result.current.isLoading).toBe(true);
 
-    scope.stop();
+    unmount();
 
     // data should remain undefined since we never resolved and handle was cancelled
-    expect(op.data.value).toBe(undefined);
+    expect(result.current.data).toBe(undefined);
 
     store.destroy();
   });
@@ -907,17 +879,17 @@ describe("useOperation — params option", () => {
   test("sync operation with params uses defaults", () => {
     const store = createCounterStore();
 
-    const scope = effectScope();
-    let op!: ReturnType<typeof useOperation>;
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "setCounter", { params: 42 }),
+    );
 
-    scope.run(() => {
-      op = useOperation(store, "setCounter", { params: 42 });
-      op.execute();
+    act(() => {
+      result.current.execute();
     });
 
     expect(store.get("counter")).toBe(42);
 
-    scope.stop();
+    unmount();
     store.destroy();
   });
 });

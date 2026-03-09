@@ -1,4 +1,4 @@
-import { createStore } from "@next-gen-store/core";
+import { createStore } from "@sqstore/core";
 import * as api from "./api";
 import type { Todo } from "./types";
 

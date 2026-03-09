@@ -1,5 +1,5 @@
 {
-  "name": "next-gen-store",
+  "name": "sqstore",
   "private": true,
   "type": "module",
   "workspaces": [

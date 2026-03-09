@@ -8,7 +8,7 @@ interface Todo {
 
 let nextId = 4;
 const todos: Todo[] = [
-  { id: 1, title: "Learn @next-gen-store/core", completed: true },
+  { id: 1, title: "Learn @sqstore/core", completed: true },
   { id: 2, title: "Build a Vue app with useSlot & useOperation", completed: false },
   { id: 3, title: "Try concurrency strategies", completed: false },
 ];

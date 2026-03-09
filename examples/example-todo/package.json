@@ -1,5 +1,5 @@
 {
-  "name": "@next-gen-store/example-todo",
+  "name": "@sqstore/example-todo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,8 +9,8 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@next-gen-store/core": "*",
-    "@next-gen-store/vue": "*",
+    "@sqstore/core": "*",
+    "@sqstore/vue": "*",
     "vue": "^3.5.0"
   },
   "devDependencies": {

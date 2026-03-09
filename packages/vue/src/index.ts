@@ -10,7 +10,7 @@ import type {
   StateSchema,
   SyncOperationHandle,
   Unsubscribe,
-} from "@next-gen-store/core";
+} from "@sqstore/core";
 import { onScopeDispose, readonly, type ShallowRef, shallowRef } from "vue";
 
 // Re-export core types commonly needed by consumers
@@ -23,8 +23,8 @@ export type {
   ParamsOf,
   ResultOf,
   StateSchema,
-} from "@next-gen-store/core";
-export { createStore } from "@next-gen-store/core";
+} from "@sqstore/core";
+export { createStore } from "@sqstore/core";
 
 // ---------------------------------------------------------------------------
 // useSlot
@@ -35,28 +35,59 @@ export { createStore } from "@next-gen-store/core";
  *
  * Uses `shallowRef` since the store manages immutability via `DeepReadonly`.
  * Unsubscribes automatically on scope disposal.
+ *
+ * An optional `selector` derives a value from the slot. Updates only trigger
+ * when the selected value changes (by `Object.is`, courtesy of `shallowRef`).
  */
+
+// Overload: no selector — returns full slot value
 export function useSlot<
   S extends StateSchema,
   Ops extends OperationsSchema,
   K extends keyof S & string,
->(store: AsyncStore<S, Ops>, key: K): Readonly<ShallowRef<DeepReadonly<S[K]>>> {
-  const value = shallowRef(store.get(key)) as ShallowRef<DeepReadonly<S[K]>>;
+>(store: AsyncStore<S, Ops>, key: K): Readonly<ShallowRef<DeepReadonly<S[K]>>>;
+
+// Overload: with selector — returns derived value
+export function useSlot<
+  S extends StateSchema,
+  Ops extends OperationsSchema,
+  K extends keyof S & string,
+  TSelected,
+>(
+  store: AsyncStore<S, Ops>,
+  key: K,
+  selector: (value: DeepReadonly<S[K]>) => TSelected,
+): Readonly<ShallowRef<TSelected>>;
+
+// Implementation
+export function useSlot<
+  S extends StateSchema,
+  Ops extends OperationsSchema,
+  K extends keyof S & string,
+  TSelected = DeepReadonly<S[K]>,
+>(
+  store: AsyncStore<S, Ops>,
+  key: K,
+  selector?: (value: DeepReadonly<S[K]>) => TSelected,
+): Readonly<ShallowRef<TSelected>> {
+  const select = selector ?? ((v: DeepReadonly<S[K]>) => v as unknown as TSelected);
+
+  const value = shallowRef(select(store.get(key))) as ShallowRef<TSelected>;
 
   const unsub = store.subscribe(key, (state) => {
-    value.value = state.data;
+    value.value = select(state.data);
   });
 
   // Re-read after subscribing to close the race window between get() and subscribe().
   // If state changed in between, the subscription may not have fired for that update.
-  const current = store.get(key);
+  const current = select(store.get(key));
   if (value.value !== current) {
     value.value = current;
   }
 
   onScopeDispose(unsub);
 
-  return readonly(value) as Readonly<ShallowRef<DeepReadonly<S[K]>>>;
+  return readonly(value) as Readonly<ShallowRef<TSelected>>;
 }
 
 // ---------------------------------------------------------------------------

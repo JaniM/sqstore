@@ -1,5 +1,5 @@
 {
-  "name": "@next-gen-store/core",
+  "name": "@sqstore/core",
   "version": "0.0.0",
   "type": "module",
   "exports": {

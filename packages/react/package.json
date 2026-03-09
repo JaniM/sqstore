@@ -1,5 +1,5 @@
 {
-  "name": "@sqstore/vue",
+  "name": "@sqstore/react",
   "version": "0.0.0",
   "type": "module",
   "exports": {
@@ -22,11 +22,16 @@
     "@sqstore/core": "*"
   },
   "peerDependencies": {
-    "vue": "^3.0.0"
+    "react": ">=18"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "jsdom": "^26.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "tsup": "^8.4.0",
-    "typescript": "^5.7.0",
-    "vue": "^3.5.0"
+    "typescript": "^5.7.0"
   }
 }
