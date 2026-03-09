@@ -463,6 +463,10 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
           if (resolved !== undefined) {
             const response = resolved as TResponse;
             await Promise.resolve(); // yield so callers can subscribe
+            if (controller.signal.aborted) {
+              tracker.transition({ status: "cancelled" });
+              throw new DOMException("Aborted", "AbortError");
+            }
             try {
               def.onSuccess?.(response, params);
             } finally {
@@ -496,6 +500,10 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
         }
 
         // 4. Success
+        if (controller.signal.aborted) {
+          tracker.transition({ status: "cancelled" });
+          throw new DOMException("Aborted", "AbortError");
+        }
         try {
           def.onSuccess?.(response, params);
         } finally {
@@ -507,6 +515,11 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
         concurrency.untrackController(controller);
       }
     })();
+
+    // Prevent unhandled-rejection warnings for expected cancellation.
+    // Errors are still delivered through the tracker/subscriber system
+    // and through handle.then() for callers that await the handle.
+    promise.catch(() => {});
 
     // Patch the lane's promise reference (IIFE runs synchronously to the
     // first await, so `lane` is already set if registerLane was true and
