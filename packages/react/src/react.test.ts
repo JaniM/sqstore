@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { createStore } from "@sqstore/core";
 import { act, renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
 import { describe, expect, test } from "vitest";
 import { useOperation, useSlot } from "./index";
 
@@ -604,10 +605,12 @@ describe("useOperation — async operations", () => {
     store.destroy();
   });
 
-  test("unmount cancels invocation", async () => {
+  test("unmount cancels invocation when cancelOnUnmount: true", async () => {
     const { store } = createAsyncStore();
 
-    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchData", { cancelOnUnmount: true }),
+    );
 
     act(() => {
       result.current.execute("test");
@@ -620,6 +623,29 @@ describe("useOperation — async operations", () => {
 
     // data should remain undefined since we never resolved
     expect(result.current.data).toBe(undefined);
+
+    store.destroy();
+  });
+
+  test("unmount does NOT cancel by default", async () => {
+    const { store, resolve } = createAsyncStore();
+
+    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
+
+    act(() => {
+      result.current.execute("test");
+    });
+
+    expect(result.current.isLoading).toBe(true);
+
+    // Unmount without cancelOnUnmount — should NOT cancel
+    unmount();
+
+    // Resolve after unmount — onSuccess should still fire
+    resolve("post-unmount");
+    await flush();
+
+    expect(store.get("result")).toBe("post-unmount");
 
     store.destroy();
   });
@@ -682,6 +708,28 @@ describe("useOperation — immediate option", () => {
 
     // Should have called execute with undefined params — still triggers loading
     expect(result.current.isLoading).toBe(true);
+
+    unmount();
+    store.destroy();
+  });
+
+  test("immediate: true works under React.StrictMode", async () => {
+    const { store, resolve } = createVoidAsyncStore();
+
+    const { result, unmount } = renderHook(
+      () => useOperation(store, "fetch", { immediate: true }),
+      { wrapper: StrictMode },
+    );
+
+    expect(result.current.isLoading).toBe(true);
+
+    await act(async () => {
+      resolve("done");
+    });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isSuccess).toBe(true);
+    expect(result.current.data).toBe("done");
 
     unmount();
     store.destroy();
@@ -857,10 +905,12 @@ describe("useOperation — params option", () => {
     store.destroy();
   });
 
-  test("unmount without params still cancels (regression)", async () => {
+  test("unmount without params cancels when cancelOnUnmount: true (regression)", async () => {
     const { store } = createAsyncStore();
 
-    const { result, unmount } = renderHook(() => useOperation(store, "fetchData"));
+    const { result, unmount } = renderHook(() =>
+      useOperation(store, "fetchData", { cancelOnUnmount: true }),
+    );
 
     act(() => {
       result.current.execute("test");

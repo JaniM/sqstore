@@ -108,6 +108,7 @@ export function useSlot<
 export interface UseOperationOptions<TParams> {
   immediate?: boolean;
   params?: TParams;
+  cancelOnUnmount?: boolean;
 }
 
 interface OperationSnapshot<TResult> {
@@ -200,7 +201,8 @@ function snapshotReducer<TResult>(
  * on the matching concurrency lane via `store.onExecution()`. Unmount
  * unsubscribes but does **not** cancel the tracked handle.
  *
- * Without `params`, unmount cancels the current invocation.
+ * Without `params`, unmount cancels the current invocation only when
+ * `cancelOnUnmount: true` is set.
  */
 
 // Overload: with params → execute() takes no args
@@ -250,6 +252,8 @@ export function useOperation<
   const currentHandleRef = useRef<AsyncOperationHandle<TResult> | undefined>(undefined);
   const hasParamsRef = useRef(hasParams);
   hasParamsRef.current = hasParams;
+  const cancelOnUnmountRef = useRef(!!options?.cancelOnUnmount);
+  cancelOnUnmountRef.current = !!options?.cancelOnUnmount;
 
   function updateFromState(s: InvocationState<TResult>) {
     dispatch({ type: "invocationState", payload: s });
@@ -308,7 +312,9 @@ export function useOperation<
         currentUnsubRef.current = undefined;
       }
       if (currentHandleRef.current) {
-        currentHandleRef.current.cancel();
+        if (cancelOnUnmountRef.current) {
+          currentHandleRef.current.cancel();
+        }
         currentHandleRef.current = undefined;
       }
     };
@@ -354,14 +360,8 @@ export function useOperation<
 
   // --- Immediate ---
 
-  const immediateGuardRef = useRef(false);
-
   useEffect(() => {
     if (!options?.immediate) return;
-    // Guard against double-execution in React Strict Mode
-    if (immediateGuardRef.current) return;
-    immediateGuardRef.current = true;
-
     execute();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -621,8 +621,30 @@ describe("useOperation — async operations", () => {
     store.destroy();
   });
 
-  test("scope disposal cancels invocation", async () => {
+  test("scope disposal cancels invocation when cancelOnUnmount: true", async () => {
     const { store } = createAsyncStore();
+
+    const scope = effectScope();
+    let op!: ReturnType<typeof useOperation>;
+
+    scope.run(() => {
+      op = useOperation(store, "fetchData", { cancelOnUnmount: true });
+      op.execute("test");
+    });
+
+    expect(op.isLoading.value).toBe(true);
+
+    // Dispose the scope — should cancel the async handle
+    scope.stop();
+
+    // data should remain undefined since we never resolved
+    expect(op.data.value).toBe(undefined);
+
+    store.destroy();
+  });
+
+  test("scope disposal does NOT cancel by default", async () => {
+    const { store, resolve } = createAsyncStore();
 
     const scope = effectScope();
     let op!: ReturnType<typeof useOperation>;
@@ -634,11 +656,14 @@ describe("useOperation — async operations", () => {
 
     expect(op.isLoading.value).toBe(true);
 
-    // Dispose the scope — should cancel the async handle
+    // Dispose scope without cancelOnUnmount — should NOT cancel
     scope.stop();
 
-    // data should remain undefined since we never resolved
-    expect(op.data.value).toBe(undefined);
+    // Resolve after disposal — onSuccess should still fire
+    resolve("post-dispose");
+    await flush();
+
+    expect(store.get("result")).toBe("post-dispose");
 
     store.destroy();
   });
@@ -883,14 +908,14 @@ describe("useOperation — params option", () => {
     store.destroy();
   });
 
-  test("scope disposal without params still cancels (regression)", async () => {
+  test("scope disposal without params cancels when cancelOnUnmount: true (regression)", async () => {
     const { store } = createAsyncStore();
 
     const scope = effectScope();
     let op!: ReturnType<typeof useOperation>;
 
     scope.run(() => {
-      op = useOperation(store, "fetchData");
+      op = useOperation(store, "fetchData", { cancelOnUnmount: true });
       op.execute("test");
     });
 

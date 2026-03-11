@@ -107,6 +107,7 @@ export function useSlot<
 export interface UseOperationOptions<TParams> {
   immediate?: boolean;
   params?: TParams;
+  cancelOnUnmount?: boolean;
 }
 
 /**
@@ -151,8 +152,8 @@ export interface UseOperationReturn<TResult, TParams> {
  * on the matching concurrency lane via `store.onExecution()`. Scope disposal
  * unsubscribes but does **not** cancel the tracked handle.
  *
- * Without `params`, scope disposal cancels the current invocation (existing
- * behavior).
+ * Without `params`, scope disposal cancels the current invocation only when
+ * `cancelOnUnmount: true` is set.
  */
 
 // Overload: with params → execute() takes no args
@@ -336,7 +337,18 @@ export function useOperation<
     }
   }) as UseOperationReturn<TResult, TParams>["execute"];
 
-  onScopeDispose(cleanupCurrent);
+  onScopeDispose(() => {
+    if (currentUnsub) {
+      currentUnsub();
+      currentUnsub = undefined;
+    }
+    if (currentHandle) {
+      if (options?.cancelOnUnmount) {
+        currentHandle.cancel();
+      }
+      currentHandle = undefined;
+    }
+  });
 
   // Handle immediate invocation
   if (options?.immediate) {
