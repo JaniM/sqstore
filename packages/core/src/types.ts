@@ -178,6 +178,22 @@ export interface AsyncOperationDefinition<TResponse = unknown, TParams = void> {
   retry?: RetryConfig;
 
   /**
+   * Returns concurrency lane keys that must settle before this operation
+   * begins (runs before `resolve`). Use `getLaneKey` on other operations
+   * to obtain their lane keys.
+   *
+   * **Warning:** Circular dependencies will deadlock — the store does not
+   * detect them.
+   *
+   * @example
+   * ```ts
+   * // Wait for any in-flight save of the same entity before fetching.
+   * waitFor: (params) => [store.operations.savePost.getLaneKey({ id: params.id })]
+   * ```
+   */
+  waitFor?: (params: TParams) => string[];
+
+  /**
    * The async function that performs the actual work.
    *
    * Receives the params and an AbortSignal as separate arguments.

@@ -441,6 +441,34 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
     return buildHandle(promise, controller, tracker);
   }
 
+  async function waitForDeps(keys: string[], signal: AbortSignal): Promise<void> {
+    const abortPromise = new Promise<never>((_, reject) => {
+      if (signal.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+      signal.addEventListener(
+        "abort",
+        () => reject(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    });
+    abortPromise.catch(() => {}); // suppress unhandled rejection
+
+    while (true) {
+      if (signal.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const activePromises: Promise<any>[] = [];
+      for (const key of keys) {
+        const lane = concurrency.getLane(key);
+        if (lane) activePromises.push(lane.promise);
+      }
+      if (activePromises.length === 0) return;
+      await Promise.race([Promise.allSettled(activePromises), abortPromise]);
+    }
+  }
+
   function startAsyncInvocation<TResponse, TParams>(
     def: AsyncOperationDefinition<TResponse, TParams>,
     params: TParams,
@@ -457,6 +485,28 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
 
     const promise = (async (): Promise<TResponse> => {
       try {
+        // 0. Wait for dependencies
+        if (def.waitFor) {
+          const depKeys = def.waitFor(params);
+          if (depKeys.length > 0) {
+            // Register lane before awaiting so concurrent callers
+            // see us (cancelPrevious can abort us, deduplicate can
+            // reuse us, enqueue can chain after us).
+            if (registerLane) {
+              lane = { controller, promise: null as any };
+              concurrency.setLane(laneKey, lane);
+            }
+            try {
+              await waitForDeps(depKeys, controller.signal);
+            } catch (err) {
+              if (isAbortError(err)) {
+                tracker.transition({ status: "cancelled" });
+              }
+              throw err;
+            }
+          }
+        }
+
         // 1. Resolve check
         if (def.resolve) {
           const resolved = def.resolve(params);
@@ -476,8 +526,8 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
           }
         }
 
-        // 2. Register lane
-        if (registerLane) {
+        // 2. Register lane (guard: skip if already registered by waitFor)
+        if (registerLane && !lane) {
           lane = { controller, promise: null as any };
           concurrency.setLane(laneKey, lane);
         }

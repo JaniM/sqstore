@@ -1563,3 +1563,431 @@ describe("onExecution", () => {
     store.destroy();
   });
 });
+
+// ========================================================================
+// waitFor tests
+// ========================================================================
+
+describe("waitFor", () => {
+  test("waits for in-flight dep to complete before executing", async () => {
+    const log: string[] = [];
+    let resolveSave!: (v: string) => void;
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      savePost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: (params: { id: number }) => `savePost:${params.id}`,
+        execute: async (params: { id: number }): Promise<string> => {
+          log.push("save:start");
+          const result = await new Promise<string>((resolve) => {
+            resolveSave = resolve;
+          });
+          log.push("save:end");
+          return result;
+        },
+      },
+      getPost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        waitFor: (params: { id: number }) => [`savePost:${params.id}`],
+        execute: async (params: { id: number }): Promise<string> => {
+          log.push("get:exec");
+          return `post-${params.id}`;
+        },
+      },
+    }));
+
+    // Start save (it blocks until we resolve)
+    const hSave = store.operations.savePost({ id: 1 });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Start get — should wait for save
+    const hGet = store.operations.getPost({ id: 1 });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(log).toEqual(["save:start"]);
+
+    // Resolve save
+    resolveSave("saved");
+    await hSave.promise;
+    await hGet.promise;
+
+    expect(log).toEqual(["save:start", "save:end", "get:exec"]);
+
+    store.destroy();
+  });
+
+  test("proceeds immediately when no active deps", async () => {
+    const log: string[] = [];
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      savePost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: (params: { id: number }) => `savePost:${params.id}`,
+        execute: async (params: { id: number }): Promise<string> => `saved-${params.id}`,
+      },
+      getPost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        waitFor: (params: { id: number }) => [`savePost:${params.id}`],
+        execute: async (params: { id: number }): Promise<string> => {
+          log.push("get:exec");
+          return `post-${params.id}`;
+        },
+      },
+    }));
+
+    // No save in flight — getPost should proceed immediately
+    const result = await store.operations.getPost({ id: 1 });
+    expect(result).toBe("post-1");
+    expect(log).toEqual(["get:exec"]);
+
+    store.destroy();
+  });
+
+  test("cancels correctly if aborted while waiting", async () => {
+    let resolveSave!: (v: string) => void;
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      savePost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: () => "savePost:1",
+        execute: async (): Promise<string> => {
+          return new Promise<string>((resolve) => {
+            resolveSave = resolve;
+          });
+        },
+      },
+      getPost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        waitFor: () => ["savePost:1"],
+        execute: async (): Promise<string> => "fetched",
+      },
+    }));
+
+    store.operations.savePost();
+    await new Promise((r) => setTimeout(r, 10));
+
+    const hGet = store.operations.getPost();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Cancel get while it's waiting for save
+    hGet.cancel();
+    await hGet.promise.catch(() => {});
+
+    expect(hGet.getState().isCancelled).toBe(true);
+
+    // Finish save to clean up
+    resolveSave("done");
+    store.destroy();
+  });
+
+  test("re-check loop detects new op on same lane key after first dep settles", async () => {
+    const log: string[] = [];
+    const resolvers: Array<(v: string) => void> = [];
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      savePost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: () => "save:1",
+        execute: async (_params: void, signal: AbortSignal): Promise<string> => {
+          return new Promise<string>((resolve, reject) => {
+            resolvers.push(resolve);
+            signal.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          });
+        },
+      },
+      getPost: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        waitFor: () => ["save:1"],
+        execute: async (): Promise<string> => {
+          log.push("get:exec");
+          return "fetched";
+        },
+      },
+    }));
+
+    // Start first save
+    const hSave1 = store.operations.savePost();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Start get — waits for save:1
+    const hGet = store.operations.getPost();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Start second save on same lane (cancelPrevious aborts first)
+    const hSave2 = store.operations.savePost();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Resolve second save (first was aborted)
+    resolvers[1]!("saved2");
+    await hSave2.promise;
+    await hGet.promise;
+
+    // get should only execute after second save finishes
+    expect(log).toEqual(["get:exec"]);
+
+    store.destroy();
+  });
+
+  test("cancelPrevious interaction — second invocation cancels first which was waiting", async () => {
+    let resolveDep!: (v: string) => void;
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      dep: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: () => "dep",
+        execute: async (): Promise<string> => {
+          return new Promise<string>((resolve) => {
+            resolveDep = resolve;
+          });
+        },
+      },
+      op: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        waitFor: () => ["dep"],
+        execute: async (): Promise<string> => "done",
+      },
+    }));
+
+    store.operations.dep();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // First invocation of op — waits for dep
+    const h1 = store.operations.op();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Second invocation — cancelPrevious should cancel h1
+    const h2 = store.operations.op();
+
+    // Resolve dep so h2 can proceed
+    resolveDep("resolved");
+
+    await h2.promise;
+    await h1.promise.catch(() => {});
+
+    expect(h1.getState().isCancelled).toBe(true);
+    expect(h2.getState().isSuccess).toBe(true);
+
+    store.destroy();
+  });
+
+  test("enqueue interaction — enqueued op waits for deps when it starts", async () => {
+    const log: string[] = [];
+    let resolveFirst!: () => void;
+    let resolveDep!: (v: string) => void;
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      dep: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: () => "dep",
+        execute: async (): Promise<string> => {
+          return new Promise<string>((resolve) => {
+            resolveDep = resolve;
+          });
+        },
+      },
+      op: {
+        type: "async" as const,
+        concurrency: "enqueue" as const,
+        waitFor: () => ["dep"],
+        execute: async (params: number): Promise<number> => {
+          log.push(`exec:${params}`);
+          if (params === 1) {
+            return new Promise<number>((resolve) => {
+              resolveFirst = () => resolve(1);
+            });
+          }
+          return params;
+        },
+      },
+    }));
+
+    // First op — no dep active, proceeds immediately
+    const h1 = store.operations.op(1);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(log).toEqual(["exec:1"]);
+
+    // Start dep
+    store.operations.dep();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Enqueue second op — will wait behind h1, then check waitFor
+    const h2 = store.operations.op(2);
+
+    // Finish first op
+    resolveFirst();
+    await h1.promise;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // h2 should be waiting for dep now, not yet executed
+    expect(log).toEqual(["exec:1"]);
+
+    // Resolve dep
+    resolveDep("done");
+    await h2.promise;
+
+    expect(log).toEqual(["exec:1", "exec:2"]);
+
+    store.destroy();
+  });
+
+  test("deduplicate interaction — deduplicated handle does NOT re-run waitFor", async () => {
+    let waitForCallCount = 0;
+    let resolveExec!: (v: string) => void;
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      op: {
+        type: "async" as const,
+        concurrency: "deduplicate" as const,
+        waitFor: () => {
+          waitForCallCount++;
+          return [];
+        },
+        execute: async (): Promise<string> => {
+          return new Promise<string>((resolve) => {
+            resolveExec = resolve;
+          });
+        },
+      },
+    }));
+
+    const h1 = store.operations.op();
+    const h2 = store.operations.op(); // deduplicated — reuses h1
+
+    // waitFor should only be called once (for h1's startAsyncInvocation)
+    expect(waitForCallCount).toBe(1);
+
+    resolveExec("result");
+    await Promise.all([h1.promise, h2.promise]);
+
+    expect(h1.getState().data).toBe("result");
+    expect(h2.getState().data).toBe("result");
+
+    store.destroy();
+  });
+
+  test("resolve interaction — waits before resolve check, so resolve sees fresh state", async () => {
+    let resolveSave!: () => void;
+
+    const store = createStore(
+      { ...EMPTY_STATE, counter: 0 },
+      ({ get, set }) => ({
+        saveCounter: {
+          type: "async" as const,
+          concurrency: "cancelPrevious" as const,
+          key: () => "saveCounter",
+          execute: async (): Promise<number> => {
+            return new Promise<number>((resolve) => {
+              resolveSave = () => {
+                set("counter", 42);
+                resolve(42);
+              };
+            });
+          },
+        },
+        getCounter: {
+          type: "async" as const,
+          concurrency: "cancelPrevious" as const,
+          waitFor: () => ["saveCounter"],
+          resolve: () => {
+            const val = get("counter");
+            return val > 0 ? val : undefined;
+          },
+          execute: async (): Promise<number> => {
+            return get("counter") as number;
+          },
+        },
+      }),
+    );
+
+    // Start save
+    store.operations.saveCounter();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Start getCounter — will wait for save, then resolve should see updated state
+    const hGet = store.operations.getCounter();
+
+    // Resolve save (sets counter to 42)
+    resolveSave();
+    const result = await hGet.promise;
+
+    expect(result).toBe(42);
+    expect(hGet.getState().resolvedFromStore).toBe(true);
+
+    store.destroy();
+  });
+
+  test("waits for all specified lane keys (multiple deps)", async () => {
+    const log: string[] = [];
+    let resolveA!: (v: string) => void;
+    let resolveB!: (v: string) => void;
+
+    const store = createStore({ ...EMPTY_STATE }, () => ({
+      depA: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: () => "depA",
+        execute: async (): Promise<string> => {
+          return new Promise<string>((resolve) => {
+            resolveA = resolve;
+          });
+        },
+      },
+      depB: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        key: () => "depB",
+        execute: async (): Promise<string> => {
+          return new Promise<string>((resolve) => {
+            resolveB = resolve;
+          });
+        },
+      },
+      op: {
+        type: "async" as const,
+        concurrency: "cancelPrevious" as const,
+        waitFor: () => ["depA", "depB"],
+        execute: async (): Promise<string> => {
+          log.push("op:exec");
+          return "done";
+        },
+      },
+    }));
+
+    store.operations.depA();
+    store.operations.depB();
+    await new Promise((r) => setTimeout(r, 10));
+
+    const hOp = store.operations.op();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(log).toEqual([]);
+
+    // Resolve only A — should still wait for B
+    resolveA("a");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(log).toEqual([]);
+
+    // Resolve B — now op should proceed
+    resolveB("b");
+    await hOp.promise;
+
+    expect(log).toEqual(["op:exec"]);
+
+    store.destroy();
+  });
+});
