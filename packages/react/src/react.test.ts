@@ -3,7 +3,7 @@ import { createStore } from "@sqstore/core";
 import { act, renderHook } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, test } from "vitest";
-import { useOperation, useSlot } from "./index";
+import { useOperation, useSlot, useStore } from "./index";
 
 // ============================================================================
 // Test store factories
@@ -941,5 +941,350 @@ describe("useOperation — params option", () => {
 
     unmount();
     store.destroy();
+  });
+});
+
+// ============================================================================
+// useStore
+// ============================================================================
+
+describe("useStore", () => {
+  test("creates store on mount and returns it", () => {
+    const { result, unmount } = renderHook(() =>
+      useStore(() => createCounterStore(), []),
+    );
+
+    expect(result.current).toBeDefined();
+    expect(result.current.get("counter")).toBe(0);
+
+    unmount();
+  });
+
+  test("destroys store on unmount", () => {
+    let destroyed = false;
+
+    const { unmount } = renderHook(() =>
+      useStore(() => {
+        const store = createCounterStore();
+        const origDestroy = store.destroy.bind(store);
+        store.destroy = () => {
+          destroyed = true;
+          origDestroy();
+        };
+        return store;
+      }, []),
+    );
+
+    expect(destroyed).toBe(false);
+    unmount();
+    expect(destroyed).toBe(true);
+  });
+
+  test("stable store reference across re-renders when deps unchanged", () => {
+    const { result, rerender, unmount } = renderHook(() =>
+      useStore(() => createCounterStore(), []),
+    );
+
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+
+    unmount();
+  });
+
+  test("recreates store when deps change", async () => {
+    const { result, rerender, unmount } = renderHook(
+      ({ dep }: { dep: number }) => useStore(() => {
+        const s = createCounterStore();
+        s.operations.setCounter(dep);
+        return s;
+      }, [dep]),
+      { initialProps: { dep: 1 } },
+    );
+
+    const first = result.current;
+    expect(first.get("counter")).toBe(1);
+
+    rerender({ dep: 2 });
+
+    // Wait for microtask (noopInit resolves via Promise.resolve)
+    await act(async () => {
+      await flush();
+    });
+
+    expect(result.current).not.toBe(first);
+    expect(result.current.get("counter")).toBe(2);
+
+    unmount();
+  });
+
+  test("destroys old store after swap", async () => {
+    let destroyCount = 0;
+
+    const { rerender, unmount } = renderHook(
+      ({ dep }: { dep: number }) => useStore(() => {
+        const store = createCounterStore();
+        const origDestroy = store.destroy.bind(store);
+        store.destroy = () => {
+          destroyCount++;
+          origDestroy();
+        };
+        return store;
+      }, [dep]),
+      { initialProps: { dep: 1 } },
+    );
+
+    expect(destroyCount).toBe(0);
+
+    rerender({ dep: 2 });
+    await act(async () => {
+      await flush();
+    });
+
+    // Old store should be destroyed after swap
+    expect(destroyCount).toBe(1);
+
+    unmount();
+    // Unmount destroys the active store too
+    expect(destroyCount).toBe(2);
+  });
+
+  test("uses current factory function on deps change", async () => {
+    let latestDep = 1;
+
+    const { result, rerender, unmount } = renderHook(
+      ({ dep }: { dep: number }) => {
+        latestDep = dep;
+        return useStore(() => {
+          const s = createCounterStore();
+          s.operations.setCounter(latestDep);
+          return s;
+        }, [dep]);
+      },
+      { initialProps: { dep: 1 } },
+    );
+
+    expect(result.current.get("counter")).toBe(1);
+
+    rerender({ dep: 42 });
+    await act(async () => {
+      await flush();
+    });
+
+    expect(result.current.get("counter")).toBe(42);
+
+    unmount();
+  });
+
+  test("with init: runs init on first mount", async () => {
+    let initCalled = false;
+
+    const { result, unmount } = renderHook(() =>
+      useStore(
+        () => createCounterStore(),
+        async (store) => {
+          initCalled = true;
+          store.operations.setCounter(99);
+        },
+        [],
+      ),
+    );
+
+    // Init runs in an effect, wait for it
+    await act(async () => {
+      await flush();
+    });
+
+    expect(initCalled).toBe(true);
+    expect(result.current.get("counter")).toBe(99);
+
+    unmount();
+  });
+
+  test("with init: keeps old store until init resolves, then swaps", async () => {
+    let resolveInit!: () => void;
+
+    const { result, rerender, unmount } = renderHook(
+      ({ dep }: { dep: number }) =>
+        useStore(
+          () => {
+            const s = createCounterStore();
+            s.operations.setCounter(dep);
+            return s;
+          },
+          async () => {
+            await new Promise<void>((r) => {
+              resolveInit = r;
+            });
+          },
+          [dep],
+        ),
+      { initialProps: { dep: 1 } },
+    );
+
+    const first = result.current;
+
+    rerender({ dep: 2 });
+    await act(async () => {
+      await flush();
+    });
+
+    // Old store should still be active because init hasn't resolved
+    expect(result.current).toBe(first);
+    expect(result.current.get("counter")).toBe(1);
+
+    // Resolve init → swap should happen
+    await act(async () => {
+      resolveInit();
+      await flush();
+    });
+
+    expect(result.current).not.toBe(first);
+    expect(result.current.get("counter")).toBe(2);
+
+    unmount();
+  });
+
+  test("with init: swaps to new store even when init rejects", async () => {
+    const { result, rerender, unmount } = renderHook(
+      ({ dep }: { dep: number }) =>
+        useStore(
+          () => {
+            const s = createCounterStore();
+            s.operations.setCounter(dep);
+            return s;
+          },
+          async () => {
+            throw new Error("init failed");
+          },
+          [dep],
+        ),
+      { initialProps: { dep: 1 } },
+    );
+
+    const first = result.current;
+
+    rerender({ dep: 2 });
+    await act(async () => {
+      await flush();
+    });
+
+    // Should have swapped despite init failure
+    expect(result.current).not.toBe(first);
+    expect(result.current.get("counter")).toBe(2);
+
+    unmount();
+  });
+
+  test("with init: cancels pending init and destroys pending store on rapid deps change", async () => {
+    let resolveInit1!: () => void;
+    let resolveInit2!: () => void;
+    let initCallCount = 0;
+    let destroyCount = 0;
+
+    const { result, rerender, unmount } = renderHook(
+      ({ dep }: { dep: number }) =>
+        useStore(
+          () => {
+            const s = createCounterStore();
+            s.operations.setCounter(dep);
+            const origDestroy = s.destroy.bind(s);
+            s.destroy = () => {
+              destroyCount++;
+              origDestroy();
+            };
+            return s;
+          },
+          async () => {
+            initCallCount++;
+            if (initCallCount === 1) {
+              // First mount init — resolve immediately
+              return;
+            }
+            await new Promise<void>((r) => {
+              if (initCallCount === 2) resolveInit1 = r;
+              else resolveInit2 = r;
+            });
+          },
+          [dep],
+        ),
+      { initialProps: { dep: 1 } },
+    );
+
+    // Wait for first mount init
+    await act(async () => {
+      await flush();
+    });
+
+    // First deps change — creates pending store
+    rerender({ dep: 2 });
+    await act(async () => {
+      await flush();
+    });
+
+    // Second deps change before first init resolves — should cancel first pending
+    rerender({ dep: 3 });
+    await act(async () => {
+      await flush();
+    });
+
+    // The pending store for dep=2 should be destroyed (cleanup ran)
+    expect(destroyCount).toBe(1);
+
+    // Resolve the second init
+    await act(async () => {
+      resolveInit2();
+      await flush();
+    });
+
+    expect(result.current.get("counter")).toBe(3);
+
+    unmount();
+  });
+
+  test("with init: uses current init function on deps change", async () => {
+    let latestDep = 1;
+
+    const { result, rerender, unmount } = renderHook(
+      ({ dep }: { dep: number }) => {
+        latestDep = dep;
+        return useStore(
+          () => createCounterStore(),
+          async (store) => {
+            store.operations.setCounter(latestDep * 10);
+          },
+          [dep],
+        );
+      },
+      { initialProps: { dep: 1 } },
+    );
+
+    // First mount init
+    await act(async () => {
+      await flush();
+    });
+
+    expect(result.current.get("counter")).toBe(10);
+
+    rerender({ dep: 5 });
+    await act(async () => {
+      await flush();
+    });
+
+    expect(result.current.get("counter")).toBe(50);
+
+    unmount();
+  });
+
+  test("works under React.StrictMode", async () => {
+    const { result, unmount } = renderHook(
+      () => useStore(() => createCounterStore(), []),
+      { wrapper: StrictMode },
+    );
+
+    expect(result.current).toBeDefined();
+    expect(result.current.get("counter")).toBe(0);
+
+    unmount();
   });
 });

@@ -11,7 +11,7 @@ import type {
   SyncOperationHandle,
   Unsubscribe,
 } from "@sqstore/core";
-import { useCallback, useEffect, useReducer, useRef, useSyncExternalStore } from "react";
+import { type DependencyList, useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 // Re-export core types commonly needed by consumers
 export type {
@@ -376,4 +376,105 @@ export function useOperation<
     isCancelled: snapshot.isCancelled,
     error: snapshot.error,
   };
+}
+
+// ---------------------------------------------------------------------------
+// useStore
+// ---------------------------------------------------------------------------
+
+function depsEqual(a: DependencyList, b: DependencyList): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (!Object.is(a[i], b[i])) return false;
+  }
+  return true;
+}
+
+const noopInit = () => Promise.resolve();
+
+// Overload: without init
+export function useStore<S extends StateSchema, Ops extends OperationsSchema>(
+  factory: () => AsyncStore<S, Ops>,
+  deps: DependencyList,
+): AsyncStore<S, Ops>;
+
+// Overload: with init
+export function useStore<S extends StateSchema, Ops extends OperationsSchema>(
+  factory: () => AsyncStore<S, Ops>,
+  init: (store: AsyncStore<S, Ops>) => Promise<void>,
+  deps: DependencyList,
+): AsyncStore<S, Ops>;
+
+// Implementation
+export function useStore<S extends StateSchema, Ops extends OperationsSchema>(
+  factory: () => AsyncStore<S, Ops>,
+  initOrDeps: ((store: AsyncStore<S, Ops>) => Promise<void>) | DependencyList,
+  maybeDeps?: DependencyList,
+): AsyncStore<S, Ops> {
+  const hasInit = typeof initOrDeps === "function";
+  const init = hasInit
+    ? (initOrDeps as (store: AsyncStore<S, Ops>) => Promise<void>)
+    : noopInit;
+  const deps = hasInit ? maybeDeps! : (initOrDeps as DependencyList);
+
+  const factoryRef = useRef(factory);
+  factoryRef.current = factory;
+  const initRef = useRef(init);
+  initRef.current = init;
+
+  const [store, setStore] = useState(() => factoryRef.current());
+
+  // Track deps changes via version counter
+  const depsRef = useRef(deps);
+  const versionRef = useRef(0);
+  if (!depsEqual(depsRef.current, deps)) {
+    depsRef.current = deps;
+    versionRef.current++;
+  }
+  const version = versionRef.current;
+
+  // Run init on first mount
+  useEffect(() => {
+    initRef.current(store).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // On deps change: create new store, init, swap when settled
+  useEffect(() => {
+    if (version === 0) return;
+
+    let cancelled = false;
+    let promoted = false;
+    const newStore = factoryRef.current();
+
+    initRef.current(newStore).then(
+      () => {
+        if (!cancelled) {
+          promoted = true;
+          setStore(newStore);
+        }
+      },
+      () => {
+        // Swap anyway on init failure
+        if (!cancelled) {
+          promoted = true;
+          setStore(newStore);
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+      if (!promoted) {
+        newStore.destroy();
+      }
+    };
+  }, [version]);
+
+  // Destroy active store when swapped out or on unmount
+  useEffect(() => {
+    return () => store.destroy();
+  }, [store]);
+
+  return store;
 }
