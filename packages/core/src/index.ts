@@ -237,7 +237,7 @@ function createConcurrencyManager() {
     trackController: (c: AbortController) => activeControllers.add(c),
     untrackController: (c: AbortController) => activeControllers.delete(c),
     cancelAll() {
-      for (const c of activeControllers) c.abort();
+      for (const c of activeControllers) c.abort(createAbortError());
       activeControllers.clear();
       lanes.clear();
     },
@@ -352,7 +352,7 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
           handle = createDeduplicatedHandle<TResponse>(existingLane);
           break;
         case "cancelPrevious":
-          existingLane.controller.abort();
+          existingLane.controller.abort(createAbortError());
           handle = startAsyncInvocation<TResponse, TParams>(def, params, laneKey, true);
           break;
         case "enqueue":
@@ -599,7 +599,7 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
     return {
       promise,
       controller,
-      cancel: () => controller.abort(),
+      cancel: () => controller.abort(createAbortError()),
       getState: () => tracker.getState(),
       subscribe: (cb) => tracker.subscribe(cb),
       then: (onfulfilled, onrejected) => promise.then(onfulfilled, onrejected),
