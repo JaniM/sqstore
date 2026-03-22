@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { createStore } from "./index";
+import { createAbortError, createStore } from "./index";
 
 // ============================================================================
 // Types for tests
@@ -244,7 +244,7 @@ describe("Async operations — cancellation", () => {
             const timer = setTimeout(() => resolve("done"), 5000);
             signal.addEventListener("abort", () => {
               clearTimeout(timer);
-              reject(new DOMException("Aborted", "AbortError"));
+              reject(createAbortError());
             });
           });
         },
@@ -323,7 +323,7 @@ describe("Concurrency — cancelPrevious", () => {
           return new Promise<string>((resolve, reject) => {
             resolvers.push(resolve);
             signal.addEventListener("abort", () => {
-              reject(new DOMException("Aborted", "AbortError"));
+              reject(createAbortError());
             });
           });
         },
@@ -498,7 +498,7 @@ describe("Store destroy cancels in-flight operations", () => {
             const timer = setTimeout(() => {}, 10000);
             signal.addEventListener("abort", () => {
               clearTimeout(timer);
-              reject(new DOMException("Aborted", "AbortError"));
+              reject(createAbortError());
             });
           });
         },
@@ -919,7 +919,7 @@ describe("Enqueued handle cancelled before execution — tracker updates", () =>
             resolvers.push(resolve);
             signal.addEventListener(
               "abort",
-              () => reject(new DOMException("Aborted", "AbortError")),
+              () => reject(createAbortError()),
               { once: true },
             );
           });
@@ -1037,7 +1037,7 @@ describe("destroy() cancels all enqueued operations, not just tail", () => {
               "abort",
               () => {
                 clearTimeout(t);
-                reject(new DOMException("Aborted", "AbortError"));
+                reject(createAbortError());
               },
               { once: true },
             );
@@ -1182,7 +1182,7 @@ describe("InvocationState.data — undefined during loading, error, and cancel",
         execute: async (_params: void, signal) => {
           return new Promise<string>((_, reject) => {
             signal.addEventListener("abort", () => {
-              reject(new DOMException("Aborted", "AbortError"));
+              reject(createAbortError());
             });
           });
         },
@@ -1700,7 +1700,7 @@ describe("waitFor", () => {
             resolvers.push(resolve);
             signal.addEventListener(
               "abort",
-              () => reject(new DOMException("Aborted", "AbortError")),
+              () => reject(createAbortError()),
               { once: true },
             );
           });

@@ -24,7 +24,7 @@ export type {
   ResultOf,
   StateSchema,
 } from "@sqstore/core";
-export { createStore } from "@sqstore/core";
+export { createAbortError, createStore, isAbortError } from "@sqstore/core";
 
 // ---------------------------------------------------------------------------
 // useSlot

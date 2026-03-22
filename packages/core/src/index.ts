@@ -86,16 +86,29 @@ function resolveDelay(
   return retryDelay;
 }
 
+export function createAbortError(message = "Aborted"): Error {
+  if (typeof DOMException !== "undefined") {
+    return new DOMException(message, "AbortError");
+  }
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+export function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      reject(signal.reason ?? createAbortError());
       return;
     }
     const onAbort = () => {
       clearTimeout(timer);
-      reject(signal!.reason ?? new DOMException("Aborted", "AbortError"));
+      reject(signal!.reason ?? createAbortError());
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -103,10 +116,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function isAbortError(err: unknown): boolean {
-  return err instanceof DOMException && err.name === "AbortError";
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +317,7 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (signal.aborted) {
-        throw new DOMException("Aborted", "AbortError");
+        throw createAbortError();
       }
       try {
         return await def.execute(params, signal);
@@ -412,7 +421,7 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
       .then(() => {
         if (controller.signal.aborted) {
           tracker.transition({ status: "cancelled" });
-          throw new DOMException("Aborted", "AbortError");
+          throw createAbortError();
         }
         const innerHandle = startAsyncInvocation<TResponse, TParams>(def, params, laneKey, false);
 
@@ -444,12 +453,12 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
   async function waitForDeps(keys: string[], signal: AbortSignal): Promise<void> {
     const abortPromise = new Promise<never>((_, reject) => {
       if (signal.aborted) {
-        reject(new DOMException("Aborted", "AbortError"));
+        reject(createAbortError());
         return;
       }
       signal.addEventListener(
         "abort",
-        () => reject(new DOMException("Aborted", "AbortError")),
+        () => reject(createAbortError()),
         { once: true },
       );
     });
@@ -457,7 +466,7 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
 
     while (true) {
       if (signal.aborted) {
-        throw new DOMException("Aborted", "AbortError");
+        throw createAbortError();
       }
       const activePromises: Promise<any>[] = [];
       for (const key of keys) {
@@ -515,7 +524,7 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
             await Promise.resolve(); // yield so callers can subscribe
             if (controller.signal.aborted) {
               tracker.transition({ status: "cancelled" });
-              throw new DOMException("Aborted", "AbortError");
+              throw createAbortError();
             }
             try {
               def.onSuccess?.(response, params);
@@ -552,7 +561,7 @@ export const createStore: CreateStore = <S extends StateSchema, Ops extends Oper
         // 4. Success
         if (controller.signal.aborted) {
           tracker.transition({ status: "cancelled" });
-          throw new DOMException("Aborted", "AbortError");
+          throw createAbortError();
         }
         try {
           def.onSuccess?.(response, params);

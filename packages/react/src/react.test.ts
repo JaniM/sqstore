@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createStore } from "@sqstore/core";
+import { createAbortError, createStore } from "@sqstore/core";
 import { act, renderHook } from "@testing-library/react";
 import { StrictMode } from "react";
 import { describe, expect, test } from "vitest";
@@ -45,7 +45,7 @@ function createAsyncStore() {
           resolve = res;
           reject = rej;
           signal.addEventListener("abort", () => {
-            rej(new DOMException("Aborted", "AbortError"));
+            rej(createAbortError());
           });
         });
       },
@@ -69,7 +69,7 @@ function createVoidAsyncStore() {
         return new Promise<string>((res, rej) => {
           resolve = res;
           signal.addEventListener("abort", () => {
-            rej(new DOMException("Aborted", "AbortError"));
+            rej(createAbortError());
           });
         });
       },
@@ -96,7 +96,7 @@ function createKeyedAsyncStore() {
           resolve = res;
           reject = rej;
           signal.addEventListener("abort", () => {
-            rej(new DOMException("Aborted", "AbortError"));
+            rej(createAbortError());
           });
         });
       },
@@ -484,7 +484,7 @@ describe("useOperation — async operations", () => {
             if (callCount === 1) resolve1 = res;
             else resolve2 = res;
             signal.addEventListener("abort", () => {
-              rej(new DOMException("Aborted", "AbortError"));
+              rej(createAbortError());
             });
           });
         },
@@ -539,7 +539,7 @@ describe("useOperation — async operations", () => {
             if (callCount === 1) resolve1 = res;
             else resolve2 = res;
             signal.addEventListener("abort", () => {
-              rej(new DOMException("Aborted", "AbortError"));
+              rej(createAbortError());
             });
           });
         },
@@ -837,7 +837,7 @@ describe("useOperation — params option", () => {
             if (callCount === 1) resolve1 = res;
             else resolve2 = res;
             signal.addEventListener("abort", () => {
-              rej(new DOMException("Aborted", "AbortError"));
+              rej(createAbortError());
             });
           });
         },
